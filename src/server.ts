@@ -9,8 +9,15 @@ import { configuracoesRoutes } from './routes/configuracoes';
 
 const server = fastify({ logger: true });
 
+const ORIGINS = [
+    'https://zentro.dvls.com.br',
+    'http://zentro.dvls.com.br',
+    'https://controlefinanceirozentro.netlify.app',
+    'http://localhost:3000'
+]
+
 server.register(cors, {
-    origin: 'http://localhost:3000',
+    origin: ORIGINS,
 
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
 
