@@ -44,12 +44,19 @@ export async function contasRoutes(app: FastifyInstance) {
         }
     });
 
-    app.get('/:id', { preHandler: [validarJWT] }, async (request, reply) => {
-        const { id } = request.params as { id: string }
-
+    app.get('/:id/:mes/:ano', { preHandler: [validarJWT] }, async (request, reply) => {
+        const { id, mes, ano } = request.params as { id: string, mes: string, ano: string }
 
         try {
-            const query = `SELECT * FROM transacoes where conta_id = $1`;
+            const query = `
+            SELECT * FROM transacoes 
+            WHERE conta_id = $1 
+                AND EXTRACT(MONTH FROM data_transacao) = $2
+                AND EXTRACT(YEAR FROM data_transacao) = $3
+            ORDER BY data_transacao DESC;
+            `;
+
+
             const secondQuery = `
             SELECT 
                 cu.*, 
@@ -60,7 +67,7 @@ export async function contasRoutes(app: FastifyInstance) {
             WHERE cu.conta_id = $1;
             `
 
-            const result = await pool.query(query, [id]);
+            const result = await pool.query(query, [id, mes, ano]);
             const secondResult = await pool.query(secondQuery, [id]);
 
             return {
