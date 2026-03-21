@@ -53,7 +53,7 @@ export async function contasRoutes(app: FastifyInstance) {
             WHERE conta_id = $1 
                 AND EXTRACT(MONTH FROM data_transacao) = $2
                 AND EXTRACT(YEAR FROM data_transacao) = $3
-            ORDER BY data_transacao DESC;
+            ORDER BY id DESC;
             `;
 
 
