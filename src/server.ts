@@ -12,6 +12,7 @@ const server = fastify({ logger: true });
 const ORIGINS = [
     'https://zentro.dvls.com.br',
     'http://zentro.dvls.com.br',
+    'https://zentro-front-beta.vercel.app',
     'https://controlefinanceirozentro.netlify.app',
     'http://localhost:3000'
 ]
