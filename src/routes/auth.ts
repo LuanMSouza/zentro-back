@@ -48,7 +48,8 @@ export async function authRoutes(app: FastifyInstance) {
         }
 
         try {
-            const result = await pool.query('SELECT * FROM usuarios WHERE usuario = $1', [usuario]);
+            // Login por usuário é case-insensitive (só a senha diferencia maiúscula/minúscula)
+            const result = await pool.query('SELECT * FROM usuarios WHERE LOWER(usuario) = LOWER($1)', [usuario]);
             const user = result.rows[0];
 
             if (!user) {
