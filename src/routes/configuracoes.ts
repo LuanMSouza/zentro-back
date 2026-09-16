@@ -47,23 +47,18 @@ app.delete('/espaco/:contaId/membros/:membroId', { preHandler: [validarJWT] }, a
             });
         }
 
-        // 2. Busca o email do membro antes de deletar (para limpar o convite)
-        const dadosMembro = await pool.query('SELECT email FROM usuarios WHERE id = $1', [membroId]);
-        const emailMembro = dadosMembro.rows[0]?.email;
-
-        // 3. Remove o vínculo na conta_usuarios
+        // 2. Remove o vínculo na conta_usuarios
         await pool.query(
             'DELETE FROM conta_usuarios WHERE usuario_id = $1 AND conta_id = $2',
             [membroId, contaId]
         );
 
-        // 4. Limpa o registro de convite para permitir que ele seja convidado novamente
-        if (emailMembro) {
-            await pool.query(
-                'DELETE FROM convites WHERE email = $1 AND conta_id = $2',
-                [emailMembro, contaId]
-            );
-        }
+        // 3. Limpa a solicitação para permitir que ele seja convidado novamente
+        //    (solicitacoes tem UNIQUE (usuario_id, conta_id))
+        await pool.query(
+            'DELETE FROM solicitacoes WHERE usuario_id = $1 AND conta_id = $2',
+            [membroId, contaId]
+        );
 
         return reply.send({ message: "Membro removido e histórico de convites limpo." });
     } catch (error) {
@@ -78,21 +73,20 @@ app.delete('/espaco/:contaId/membros/:membroId', { preHandler: [validarJWT] }, a
 
         try {
             const permissao = await pool.query(
-                'SELECT role FROM conta_usuarios WHERE usuario_id = $1 AND conta_id = $2',
+                'SELECT papel FROM conta_usuarios WHERE usuario_id = $1 AND conta_id = $2',
                 [adminId, contaId]
             );
 
-            if (permissao.rows[0]?.role !== 'adm') {
+            if (permissao.rows[0]?.papel !== 'adm') {
                 return reply.status(403).send({ error: "Apenas o administrador pode excluir o espaço." });
             }
 
-            // Deleta transações primeiro (FK), depois usuários_contas, depois a conta
-            await pool.query('DELETE FROM transacoes WHERE conta_id = $1', [contaId]);
-            await pool.query('DELETE FROM usuarios_contas WHERE conta_id = $1', [contaId]);
+            // transacoes, conta_usuarios e solicitacoes têm ON DELETE CASCADE em conta_id
             await pool.query('DELETE FROM contas WHERE id = $1', [contaId]);
 
             return reply.send({ message: "Espaço excluído permanentemente." });
         } catch (error) {
+            app.log.error(error);
             return reply.status(500).send({ error: "Erro ao excluir espaço" });
         }
     });

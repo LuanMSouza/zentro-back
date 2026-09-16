@@ -141,38 +141,37 @@ export async function transacoesRoutes(app: FastifyInstance) {
             const valores: any[] = [];
             let idx = 1;
 
-            if (descricao) {
+            if (descricao !== undefined) {
                 campos.push(`descricao = $${idx++}`);
                 valores.push(descricao);
             }
-            if (valor) {
+            if (valor !== undefined) {
                 campos.push(`valor = $${idx++}`);
                 valores.push(valor);
             }
-            if (tipo) {
+            if (tipo !== undefined) {
                 campos.push(`tipo = $${idx++}`);
                 valores.push(tipo);
             }
-            if (categoria) {
+            if (categoria !== undefined) {
                 campos.push(`categoria = $${idx++}`);
                 valores.push(categoria);
             }
-            if (data_transacao) {
+            if (data_transacao !== undefined) {
                 campos.push(`data_transacao = $${idx++}`);
                 valores.push(data_transacao);
-
-                if (campos.length === 0) {
-                    return reply.code(400).send({ error: "Nenhum campo para atualizar." });
-                }
-
-                const query = `UPDATE transacoes SET ${campos.join(', ')} WHERE id = $${idx} RETURNING *`;
-                valores.push(id);
-
-                const result = await pool.query(query, valores);
-
-                return reply.send(result.rows[0]);
-
             }
+
+            if (campos.length === 0) {
+                return reply.code(400).send({ error: "Nenhum campo para atualizar." });
+            }
+
+            const query = `UPDATE transacoes SET ${campos.join(', ')} WHERE id = $${idx} RETURNING *`;
+            valores.push(id);
+
+            const result = await pool.query(query, valores);
+
+            return reply.send(result.rows[0]);
         } catch (error) {
             app.log.error(error);
             return reply.code(500).send({ error: "Erro ao atualizar transação." });

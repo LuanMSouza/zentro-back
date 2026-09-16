@@ -44,35 +44,93 @@ export async function contasRoutes(app: FastifyInstance) {
         }
     });
 
-    app.get('/:id/:mes/:ano', { preHandler: [validarJWT] }, async (request, reply) => {
-        const { id, mes, ano } = request.params as { id: string, mes: string, ano: string }
+    app.get('/:id/membros', { preHandler: [validarJWT] }, async (request, reply) => {
+        const { id } = request.params as { id: string };
+        const usuario_id = request.user.id;
 
         try {
+            const acesso = await pool.query(
+                'SELECT 1 FROM conta_usuarios WHERE conta_id = $1 AND usuario_id = $2',
+                [id, usuario_id]
+            );
+
+            if (acesso.rowCount === 0) {
+                return reply.code(403).send({ error: "Você não tem acesso a esta conta." });
+            }
+
+            const result = await pool.query(
+                `SELECT
+                    cu.*,
+                    u.iniciais,
+                    u.nome
+                FROM conta_usuarios cu
+                LEFT JOIN usuarios u ON cu.usuario_id = u.id
+                WHERE cu.conta_id = $1`,
+                [id]
+            );
+
+            return { usuarios: result.rows };
+        } catch (error) {
+            app.log.error(error);
+            return reply.code(500).send({ error: "Erro ao buscar membros da conta." });
+        }
+    });
+
+    app.get('/:id/:mes/:ano', { preHandler: [validarJWT] }, async (request, reply) => {
+        const { id, mes, ano } = request.params as { id: string, mes: string, ano: string }
+        const usuario_id = request.user.id;
+
+        const mesNum = Number(mes);
+        const anoNum = Number(ano);
+
+        if (!Number.isInteger(mesNum) || mesNum < 1 || mesNum > 12 || !Number.isInteger(anoNum)) {
+            return reply.code(400).send({ error: "Mês ou ano inválido." });
+        }
+
+        try {
+            const acesso = await pool.query(
+                'SELECT 1 FROM conta_usuarios WHERE conta_id = $1 AND usuario_id = $2',
+                [id, usuario_id]
+            );
+
+            if (acesso.rowCount === 0) {
+                return reply.code(403).send({ error: "Você não tem acesso a esta conta." });
+            }
+
             const query = `
-            SELECT * FROM transacoes 
-            WHERE conta_id = $1 
+            SELECT * FROM transacoes
+            WHERE conta_id = $1
                 AND EXTRACT(MONTH FROM data_transacao) = $2
                 AND EXTRACT(YEAR FROM data_transacao) = $3
             ORDER BY id DESC;
             `;
 
+            // Saldo acumulado de tudo antes do mês selecionado, pra não zerar o saldo todo dia 1.
+            const saldoAnteriorQuery = `
+            SELECT COALESCE(SUM(CASE WHEN tipo = 'receita' THEN valor ELSE -valor END), 0) AS saldo
+            FROM transacoes
+            WHERE conta_id = $1
+                AND data_transacao < make_date($2::int, $3::int, 1);
+            `;
 
             const secondQuery = `
-            SELECT 
-                cu.*, 
+            SELECT
+                cu.*,
                 u.iniciais,
-                u.nome 
-            FROM conta_usuarios cu 
-            LEFT JOIN usuarios u ON cu.usuario_id = u.id 
+                u.nome
+            FROM conta_usuarios cu
+            LEFT JOIN usuarios u ON cu.usuario_id = u.id
             WHERE cu.conta_id = $1;
             `
 
-            const result = await pool.query(query, [id, mes, ano]);
+            const result = await pool.query(query, [id, mesNum, anoNum]);
+            const saldoAnteriorResult = await pool.query(saldoAnteriorQuery, [id, anoNum, mesNum]);
             const secondResult = await pool.query(secondQuery, [id]);
 
             return {
                 transacoes: result.rows,
-                usuarios: secondResult.rows
+                usuarios: secondResult.rows,
+                saldoAnterior: Number(saldoAnteriorResult.rows[0].saldo)
             };
 
         } catch (error) {
@@ -84,6 +142,11 @@ export async function contasRoutes(app: FastifyInstance) {
     app.post('/criarconta', { preHandler: [validarJWT] }, async (request, reply) => {
         const { nome, convidado_id } = request.body as { nome: string, convidado_id?: number };
         const criado_por = request.user.id;
+
+        if (!nome || !nome.trim()) {
+            return reply.code(400).send({ error: "Nome da conta é obrigatório." });
+        }
+
         const client = await pool.connect();
 
         try {
@@ -136,6 +199,8 @@ export async function contasRoutes(app: FastifyInstance) {
         const { usuario_id, papel } = request.body as { usuario_id: number, papel: string };
         const admin_id = request.user.id;
 
+        const papelValido = ['adm', 'editor', 'leitura'].includes(papel) ? papel : 'leitura';
+
         try {
             // Validação: Apenas ADM da conta pode convidar
             const permissao = await pool.query(
@@ -147,11 +212,11 @@ export async function contasRoutes(app: FastifyInstance) {
                 return reply.code(403).send({ error: "Apenas administradores podem convidar membros." });
             }
 
-            // Criamos a SOLICITAÇÃO (Pendente)
+            // Criamos a SOLICITAÇÃO (Pendente), já guardando o papel escolhido
             await pool.query(
-                `INSERT INTO solicitacoes (usuario_id, conta_id, convidado_por) 
-             VALUES ($1, $2, $3)`,
-                [usuario_id, contaId, admin_id]
+                `INSERT INTO solicitacoes (usuario_id, conta_id, convidado_por, papel)
+             VALUES ($1, $2, $3, $4)`,
+                [usuario_id, contaId, admin_id, papelValido]
             );
 
             return reply.send({ message: "Convite enviado com sucesso!" });
@@ -200,26 +265,34 @@ export async function contasRoutes(app: FastifyInstance) {
         try {
             await client.query('BEGIN');
 
-            if (aceito) {
-                // 1. Pega os dados da solicitação
-                const sol = await client.query('SELECT conta_id FROM solicitacoes WHERE id = $1', [id]);
+            // Só pode responder uma solicitação que seja SUA e que ainda esteja pendente.
+            const sol = await client.query(
+                'SELECT conta_id, papel FROM solicitacoes WHERE id = $1 AND usuario_id = $2 AND situacao = $3',
+                [id, usuario_id, 'pendente']
+            );
 
-                // 2. Insere na tabela de membros
+            if (sol.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return reply.code(404).send({ error: "Convite não encontrado ou já respondido." });
+            }
+
+            if (aceito) {
+                // Insere na tabela de membros com o papel que foi realmente oferecido no convite
                 await client.query(
                     'INSERT INTO conta_usuarios (conta_id, usuario_id, papel) VALUES ($1, $2, $3)',
-                    [sol.rows[0].conta_id, usuario_id, 'leitor']
+                    [sol.rows[0].conta_id, usuario_id, sol.rows[0].papel]
                 );
 
-                // 3. Atualiza a solicitação
-                await client.query('UPDATE solicitacoes SET situacao = $1 WHERE id = $2', ['aceito', id]);
+                await client.query('UPDATE solicitacoes SET situacao = $1, respondido_em = NOW() WHERE id = $2', ['aceito', id]);
             } else {
-                await client.query('UPDATE solicitacoes SET situacao = $1 WHERE id = $2', ['recusado', id]);
+                await client.query('UPDATE solicitacoes SET situacao = $1, respondido_em = NOW() WHERE id = $2', ['recusado', id]);
             }
 
             await client.query('COMMIT');
             return reply.send({ message: "Resposta registrada!" });
         } catch (e) {
             await client.query('ROLLBACK');
+            app.log.error(e);
             return reply.code(500).send({ error: "Erro ao processar convite." });
         } finally {
             client.release();

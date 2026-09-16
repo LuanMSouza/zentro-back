@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import fastify from "fastify";
+import fastify, { FastifyError } from "fastify";
 import fastifyJwt from '@fastify/jwt'; // Importe antes das rotas
 import cors from '@fastify/cors';
 import { authRoutes } from './routes/auth';
@@ -26,8 +26,13 @@ server.register(cors, {
 })
 
 
+if (!process.env.JWT_SECRET) {
+    console.error('❌ JWT_SECRET não definido nas variáveis de ambiente.');
+    process.exit(1);
+}
+
 server.register(fastifyJwt, {
-    secret: process.env.JWT_SECRET || 'aaa',
+    secret: process.env.JWT_SECRET,
     verify: {
         extractToken: (request) => {
             const authHeader = request.headers.authorization;
@@ -42,6 +47,16 @@ server.register(authRoutes, { prefix: '/auth' });
 server.register(contasRoutes, { prefix: '/contas' });
 server.register(transacoesRoutes, { prefix: '/transacoes' });
 server.register(configuracoesRoutes, { prefix: '/configuracoes' });
+
+server.setErrorHandler((error: FastifyError, request, reply) => {
+    request.log.error(error);
+    const statusCode = error.statusCode ?? 500;
+
+    if (statusCode >= 500) {
+        return reply.status(500).send({ error: 'Erro interno do servidor.' });
+    }
+    return reply.status(statusCode).send({ error: error.message });
+});
 
 const start = async () => {
     try {
